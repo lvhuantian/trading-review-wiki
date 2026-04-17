@@ -68,6 +68,12 @@ function App() {
   }, [])
 
   async function handleProjectOpened(proj: WikiProject) {
+    // Clear project-scoped stores so we don't leak data from the previous project
+    useReviewStore.getState().setItems([])
+    useChatStore.getState().setConversations([])
+    useChatStore.getState().setMessages([])
+    useChatStore.getState().setActiveConversation(null)
+
     setProject(proj)
     setSelectedFile(null)
     setActiveView("wiki")
@@ -112,23 +118,19 @@ function App() {
     // Load persisted review items
     try {
       const savedReview = await loadReviewItems(proj.path)
-      if (savedReview.length > 0) {
-        useReviewStore.getState().setItems(savedReview)
-      }
+      useReviewStore.getState().setItems(savedReview)
     } catch (err) {
       console.warn("[App] Failed to load review items:", err)
     }
     // Load persisted chat history
     try {
       const savedChat = await loadChatHistory(proj.path)
-      if (savedChat.conversations.length > 0) {
-        useChatStore.getState().setConversations(savedChat.conversations)
-        useChatStore.getState().setMessages(savedChat.messages)
-        // Set most recent conversation as active
-        const sorted = [...savedChat.conversations].sort((a, b) => b.updatedAt - a.updatedAt)
-        if (sorted[0]) {
-          useChatStore.getState().setActiveConversation(sorted[0].id)
-        }
+      useChatStore.getState().setConversations(savedChat.conversations)
+      useChatStore.getState().setMessages(savedChat.messages)
+      // Set most recent conversation as active
+      const sorted = [...savedChat.conversations].sort((a, b) => b.updatedAt - a.updatedAt)
+      if (sorted[0]) {
+        useChatStore.getState().setActiveConversation(sorted[0].id)
       }
     } catch (err) {
       console.warn("[App] Failed to load chat history:", err)
@@ -163,6 +165,10 @@ function App() {
     setProject(null)
     setFileTree([])
     setSelectedFile(null)
+    useReviewStore.getState().setItems([])
+    useChatStore.getState().setConversations([])
+    useChatStore.getState().setMessages([])
+    useChatStore.getState().setActiveConversation(null)
   }
 
   if (loading) {
