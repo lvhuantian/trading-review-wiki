@@ -4,6 +4,19 @@
 
 ---
 
+## v0.5.4 — 2026-04-17
+
+### 修复：切换工作区后旧数据残留
+
+- **问题**：更换工作区（或打开新项目）后，"待审阅"面板和聊天历史仍显示旧工作区的内容。
+- **根因**：`App.tsx` 在加载新项目的 review/chat 数据时，若新工作区为空数组，由于 `if (savedReview.length > 0)` 的保护逻辑，`setItems` 未被调用，导致旧数据继续驻留在内存中。
+- **修复**：
+  1. `handleProjectOpened` 开头先清空 `reviewStore` 和 `chatStore`。
+  2. 去掉空数组保护，直接 `setItems(savedReview)` / `setConversations(savedChat.conversations)`。
+  3. `handleSwitchProject` 切回欢迎页时也同步清空相关 stores。
+
+---
+
 ## v0.5.3 — 2026-04-16
 
 ### 修复：截图文件夹 PNG 图片无法显示 + 聊天图片引用路径错误
