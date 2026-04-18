@@ -6,9 +6,23 @@
 
 ## v0.5.5 — 2026-04-18
 
-### 修复 / 更新
+### 新增：Deep Research 人工审核
 
-- 新增 Deep Research 人工审核（保存前预览/重新生成/丢弃），彻底修复切换工作区状态残留
+- **问题**：Deep Research 合成完成后直接自动保存到 Wiki，用户没有机会检查和修改。
+- **实现**：
+  1. 新增 `pending_review` 状态，位于 `synthesizing` 和 `saving` 之间。
+  2. 合成完成后自动剥离 `<think>` / `<thinking>` 块，展示干净草稿预览。
+  3. 用户可选择：**保存到 Wiki**、**重新生成**（复用原 topic + queries 重新排队）、**丢弃**。
+  4. 保存时才执行文件写入和 auto-ingest，防止误操作污染 Wiki。
+
+### 修复：彻底清理切换工作区后的状态残留
+
+- **问题**：切换项目后，右侧面板仍显示旧项目的研究任务/文件预览/聊天流式状态，`activeView` 也未重置。
+- **根因**：`handleSwitchProject` 和 `handleProjectOpened` 仅清空了 review/chat 的 conversations/messages，遗漏了 `fileContent`、`activeView`、`chatExpanded`、`researchStore.tasks`、`isStreaming` 等状态。
+- **修复**：
+  1. `chat-store` 新增 `resetProjectState()` 一键重置所有聊天相关状态。
+  2. `research-store` 新增 `clearTasks()` 清空所有研究任务。
+  3. `handleSwitchProject` 和 `handleProjectOpened` 统一调用上述方法，并额外重置 `setFileContent("")`、`setActiveView("wiki")`、`setChatExpanded(false)`、`setPanelOpen(false)`。
 
 ---
 

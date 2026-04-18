@@ -55,7 +55,7 @@
 
 ## Downloads
 
-- **Windows**: [Trading Review Wiki_0.5.3_x64-setup.exe](https://github.com/ymj8903668-droid/trading-review-wiki/releases/latest)
+- **Windows**: [Trading Review Wiki_0.5.5_x64-setup.exe](https://github.com/ymj8903668-droid/trading-review-wiki/releases/latest)
 - **macOS**: Download `.dmg` from GitHub Releases (Apple Silicon)
 
 ## Tech Stack
@@ -350,6 +350,8 @@ Not in the original. When the LLM identifies knowledge gaps:
 - **User confirmation dialog** — editable topic and search queries shown for review before research starts
 - **LLM synthesizes** findings into a wiki research page with cross-references to existing wiki
 - **Thinking display** — `<think>` blocks shown as collapsible sections during synthesis, auto-scroll to latest content
+- **Human-in-the-Loop Review** — research synthesis pauses at `pending_review` state; users can preview the clean draft (with `<think>` blocks stripped), then choose to **Save to Wiki**, **Regenerate**, or **Discard**
+- **Human-in-the-Loop Review** — research synthesis pauses at `pending_review` state; users can preview the clean draft (with `<think>` blocks stripped), then choose to **Save to Wiki**, **Regenerate**, or **Discard**
 - **Auto-ingest** — research results automatically processed to extract entities/concepts into the wiki
 - **Task queue** with 3 concurrent tasks
 - **Research Panel** — dedicated sidebar panel with dynamic height, real-time streaming progress
