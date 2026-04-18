@@ -206,6 +206,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setMaxHistoryMessages: (maxHistoryMessages) => set({ maxHistoryMessages }),
 
+  resetProjectState: () =>
+    set({
+      conversations: [],
+      activeConversationId: null,
+      messages: [],
+      isStreaming: false,
+      streamingContent: "",
+      mode: "chat",
+      ingestSource: null,
+    }),
+
   removeLastAssistantMessage: () =>
     set((state) => {
       const activeId = state.activeConversationId

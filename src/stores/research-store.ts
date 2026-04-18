@@ -66,6 +66,8 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       tasks: state.tasks.filter((t) => t.id !== id),
     })),
 
+  clearTasks: () => set({ tasks: [] }),
+
   setPanelOpen: (panelOpen) => set({ panelOpen }),
 
   getRunningCount: () => {

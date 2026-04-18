@@ -4,6 +4,7 @@ import i18n from "@/i18n"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
+import { useResearchStore } from "@/stores/research-store"
 import { listDirectory, openProject, getClipServerToken } from "@/commands/fs"
 import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig } from "@/lib/project-store"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
@@ -19,7 +20,9 @@ function App() {
   const setProject = useWikiStore((s) => s.setProject)
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
+  const setFileContent = useWikiStore((s) => s.setFileContent)
   const setActiveView = useWikiStore((s) => s.setActiveView)
+  const setChatExpanded = useWikiStore((s) => s.setChatExpanded)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -70,13 +73,16 @@ function App() {
   async function handleProjectOpened(proj: WikiProject) {
     // Clear project-scoped stores so we don't leak data from the previous project
     useReviewStore.getState().setItems([])
-    useChatStore.getState().setConversations([])
-    useChatStore.getState().setMessages([])
-    useChatStore.getState().setActiveConversation(null)
+    useChatStore.getState().resetProjectState()
+    useResearchStore.getState().clearTasks()
+    useResearchStore.getState().setPanelOpen(false)
 
     setProject(proj)
+    setFileTree([])
     setSelectedFile(null)
+    setFileContent("")
     setActiveView("wiki")
+    setChatExpanded(false)
     await saveLastProject(proj)
 
     // Restore ingest queue (resume interrupted tasks)
@@ -165,10 +171,13 @@ function App() {
     setProject(null)
     setFileTree([])
     setSelectedFile(null)
+    setFileContent("")
+    setActiveView("wiki")
+    setChatExpanded(false)
     useReviewStore.getState().setItems([])
-    useChatStore.getState().setConversations([])
-    useChatStore.getState().setMessages([])
-    useChatStore.getState().setActiveConversation(null)
+    useChatStore.getState().resetProjectState()
+    useResearchStore.getState().clearTasks()
+    useResearchStore.getState().setPanelOpen(false)
   }
 
   if (loading) {
