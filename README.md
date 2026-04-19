@@ -40,6 +40,7 @@
 - **Stock Archives** — LLM routes stock insights to `wiki/股票/` instead of generic `entities/`
 - **Image Support** — Send screenshots in chat, preview PNG / JPG / GIF in the preview panel
 - **Theme Switching** — 5 preset color themes (Midnight Blue, Forest Green, Deep Plum, Warm Amber) for different trading moods
+- **Wiki Reorganize Script** — Bulk-move misplaced root-level pages into typed directories. Handy when LLM puts files in the wrong place. [See `scripts/reorganize-wiki.cjs`](scripts/reorganize-wiki.cjs)
 
 ### Knowledge Management
 
@@ -124,6 +125,7 @@ This project is licensed under the **GNU General Public License v3.0** — see [
 - **Chrome Web Clipper** — one-click web page capture with auto-ingest into knowledge base
 - **Quick Review Template** — one-click daily trading review creation, auto-saved to `raw/daily-reviews/`
 - **Trade Order Import** — CSV/XLSX trade order import with automatic FIFO P&L calculation
+- **Wiki Reorganize Script** — batch-fix pages that LLM dropped in the wiki root instead of the correct typed folder (`scripts/reorganize-wiki.cjs`)
 - **Manual Save Button** — explicit save button in the wiki editor for immediate persistence
 
 ## What is this?
