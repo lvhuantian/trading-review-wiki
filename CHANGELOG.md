@@ -4,6 +4,21 @@
 
 ---
 
+## v0.6.8 — 2026-04-20
+
+### 修复（Bug Fix）
+
+- **修复 Deep Research 保存后重复 ingest**：`deep-research.ts` 中 `saveResearchDraft()` 对同一文件连续调用两次 `autoIngest`，导致重复生成 wiki 页面和 review items。已删除第二次调用。
+- **修复聊天消息 ID 刷新后冲突**：`chat-store.ts` 使用模块级递增计数器生成消息 ID，页面刷新后计数器重置，可能和已有消息 ID 冲突。已改用 `Date.now() + 随机数` 生成唯一 ID。
+- **修复 ingest 队列取消可能误删文件**：`ingest-queue.ts` 使用模块级 `lastWrittenFiles` 变量追踪当前任务写入的文件，取消时清理。但模块级变量在多任务快速切换时可能误删其他任务文件。已将任务状态封装为 `TaskContext` 对象，避免跨任务污染。
+- **修复 LLM 请求 abort 监听器泄漏**：`llm-client.ts` 中 `streamChat` 每次调用都向外部 `signal` 添加 `abort` 事件监听器，但请求完成后从不移除。多次调用后监听器累积，可能导致内存泄漏。已在 `finally` 块中移除监听器。
+
+### 改进（Improvement）
+
+- **更新 CLAUDE.md**：新增测试规范、错误处理约定、性能红线、CLAUDE.md 自身维护规则四个章节。
+
+---
+
 ## v0.6.7 — 2026-04-20
 
 ### 新增（浅色主题）

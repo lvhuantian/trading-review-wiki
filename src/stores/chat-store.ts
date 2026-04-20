@@ -57,11 +57,8 @@ interface ChatState {
   getActiveMessages: () => DisplayMessage[]
 }
 
-let messageCounter = 0
-
 function nextId(): string {
-  messageCounter += 1
-  return String(messageCounter)
+  return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
 function generateConversationId(): string {
