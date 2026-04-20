@@ -4,6 +4,24 @@
 
 ---
 
+## v0.6.6 — 2026-04-19
+
+### 修复（Save to Wiki / Deep Research 卡死 + Activity 面板）
+
+- **修复 Save to Wiki 卡死**：`chat-message.tsx` 中文件名递增逻辑使用 `while(true) + readFile try-catch` 检查文件是否存在。但 Rust 后端 `read_file` 在文件不存在时**不抛出错误**（返回 `"[Binary file: ...]"` 字符串），导致 while 循环无限递增、永不 break，`handleSave` 永远挂起，`autoIngest` 无法调用。已改用 `listDirectory` 获取目录列表后用 `Set.has()` 判断，彻底避免该问题。
+- **修复 Deep Research Save to Wiki 卡死**：`deep-research.ts` 中存在相同的 `readFile try-catch` 文件名递增逻辑，同样会导致无限循环。已统一改用 `listDirectory` 检查。
+- **修复 Review Save to Wiki 卡死**：`review-view.tsx` 中存在相同的无限循环问题，已统一修复。
+- **修复 Activity 面板强制展开闪烁**：`useEffect` 依赖了 `expanded` 和 `hasQueue`，导致用户手动收起后面板立即重新展开，形成闪烁循环。已移除 `expanded`/`hasQueue` 依赖，仅在新任务启动（`runningCount` 从 `0` 变为 `>0`）时自动展开一次。
+- **回滚 writeFileBlocks 目录白名单**：v0.6.4/v0.6.5 引入的目录白名单+跳过逻辑在实际使用中被证明过于严格，导致 LLM 生成的有效内容被丢弃。恢复为 v0.6.4 之前的原始行为 —— 直接写入 LLM 输出的路径，由 prompt 中的 schema 约束引导 LLM 行为。
+
+## v0.6.5 — 2026-04-19
+
+### 改进（Activity 面板 + 调试清理）
+
+- **修复 Activity 面板强制展开闪烁**：移除 `expanded`/`hasQueue` 依赖，仅在新任务启动时自动展开一次。
+- **移除调试日志**：清理 `chat-message.tsx`、`review-view.tsx`、`deep-research.ts`、`activity-store.ts`、`activity-panel.tsx` 中残留的 `console.log` 调试输出。
+- **回滚 writeFileBlocks 目录白名单**：恢复为原始写入行为，由 schema prompt 引导 LLM。
+
 ## v0.6.4 — 2026-04-19
 
 ### 修复（auto-ingest 目录写入控制）

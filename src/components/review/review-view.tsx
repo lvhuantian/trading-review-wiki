@@ -75,18 +75,15 @@ export function ReviewView() {
         const baseFileName = `${slug}-${date}.md`
 
         // Ensure unique file name to avoid overwriting existing files
+        const queriesDir = await listDirectory(`${pp}/wiki/queries`).catch(() => [] as { name: string; is_dir: boolean }[])
+        const existingNames = new Set(queriesDir.map((n) => n.name))
+
         let fileName = baseFileName
         let counter = 1
-        while (true) {
-          const testPath = `${pp}/wiki/queries/${fileName}`
-          try {
-            await readFile(testPath)
-            const base = baseFileName.replace(/\.md$/, "")
-            fileName = `${base}-${counter}.md`
-            counter++
-          } catch {
-            break
-          }
+        while (existingNames.has(fileName)) {
+          const base = baseFileName.replace(/\.md$/, "")
+          fileName = `${base}-${counter}.md`
+          counter++
         }
         const filePath = `${pp}/wiki/queries/${fileName}`
 

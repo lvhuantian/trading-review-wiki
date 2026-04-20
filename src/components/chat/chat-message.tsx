@@ -180,20 +180,15 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
       const baseFileName = `${slug}-${date}.md`
 
       // Ensure unique file name to avoid overwriting existing files
+      const queriesDir = await listDirectory(`${pp}/wiki/queries`).catch(() => [] as { name: string; is_dir: boolean }[])
+      const existingNames = new Set(queriesDir.map((n) => n.name))
+
       let fileName = baseFileName
       let counter = 1
-      while (true) {
-        const testPath = `${pp}/wiki/queries/${fileName}`
-        try {
-          await readFile(testPath)
-          // File exists, increment counter and try again
-          const base = baseFileName.replace(/\.md$/, "")
-          fileName = `${base}-${counter}.md`
-          counter++
-        } catch {
-          // File doesn't exist, we can use this name
-          break
-        }
+      while (existingNames.has(fileName)) {
+        const base = baseFileName.replace(/\.md$/, "")
+        fileName = `${base}-${counter}.md`
+        counter++
       }
       const filePath = `${pp}/wiki/queries/${fileName}`
 

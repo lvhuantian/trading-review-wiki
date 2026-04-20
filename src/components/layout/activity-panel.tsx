@@ -39,6 +39,8 @@ export function ActivityPanel() {
 
   const runningCount = items.filter((i) => i.status === "running").length
   const hasItems = items.length > 0
+  const queueSummary = getQueueSummary()
+  const hasQueue = queueSummary.total > 0
 
   // Poll queue state
   useEffect(() => {
@@ -47,9 +49,6 @@ export function ActivityPanel() {
     }, 1000)
     return () => clearInterval(interval)
   }, [])
-
-  const queueSummary = getQueueSummary()
-  const hasQueue = queueSummary.total > 0
 
   // All hooks must be before any conditional return
   const handleRetry = useCallback((taskId: string) => {
@@ -62,16 +61,13 @@ export function ActivityPanel() {
     cancelTask(normalizePath(project.path), taskId)
   }, [project])
 
-  // Auto-expand when a new task starts running
+  // Auto-expand when a new task starts running (only when runningCount goes 0→>0)
   useEffect(() => {
     if (runningCount > 0 && prevRunningRef.current === 0) {
       setExpanded(true)
     }
-    if (hasQueue && !expanded) {
-      setExpanded(true)
-    }
     prevRunningRef.current = runningCount
-  }, [runningCount, hasQueue, expanded])
+  }, [runningCount])
 
   if (!hasItems && !hasQueue) return null
 
