@@ -140,7 +140,7 @@ export async function autoIngest(
   activity.updateItem(activityId, { detail: "Writing files..." })
   let writtenPaths: string[] = []
   try {
-    writtenPaths = await writeFileBlocks(pp, generation)
+    writtenPaths = await writeFileBlocks(pp, generation, wikiDirs)
   } catch (err) {
     console.error("Failed to write wiki files:", err)
     activity.updateItem(activityId, { status: "error", detail: `Write failed: ${err instanceof Error ? err.message : String(err)}` })
@@ -235,14 +235,69 @@ export async function autoIngest(
   return writtenPaths
 }
 
-async function writeFileBlocks(projectPath: string, text: string): Promise<string[]> {
+async function writeFileBlocks(
+  projectPath: string,
+  text: string,
+  allowedDirs?: string[],
+): Promise<string[]> {
   const writtenPaths: string[] = []
   const matches = text.matchAll(FILE_BLOCK_REGEX)
 
+  // Build a set of allowed directory names (case-insensitive) and an English→Chinese map
+  const allowedSet = new Set<string>()
+  const enToCnMap = new Map<string, string>()
+  const cnDirs = new Set<string>()
+
+  if (allowedDirs && allowedDirs.length > 0) {
+    for (const dir of allowedDirs) {
+      const dirName = dir.replace(/^wiki\//, "").replace(/\/$/, "").toLowerCase()
+      allowedSet.add(dirName)
+      cnDirs.add(dirName)
+    }
+
+    // Common English→Chinese mappings for trading wiki directories
+    const knownMappings: Record<string, string> = {
+      stocks: "股票",
+      concepts: "概念",
+      strategies: "策略",
+      patterns: "模式",
+      errors: "错误",
+      "market-environment": "市场环境",
+      evolution: "进化",
+      summary: "总结",
+    }
+    for (const [en, cn] of Object.entries(knownMappings)) {
+      if (allowedSet.has(cn.toLowerCase()) && !allowedSet.has(en.toLowerCase())) {
+        enToCnMap.set(en.toLowerCase(), cn)
+      }
+    }
+  }
+
   for (const match of matches) {
-    const relativePath = match[1].trim()
+    let relativePath = match[1].trim()
     const content = match[2]
     if (!relativePath) continue
+
+    // Validate / remap directory against allowedDirs
+    if (allowedDirs && allowedDirs.length > 0) {
+      const parts = relativePath.split("/")
+      if (parts.length >= 2 && parts[0] === "wiki") {
+        const targetDirRaw = parts[1]
+        const targetDirLower = targetDirRaw.toLowerCase()
+
+        if (!allowedSet.has(targetDirLower)) {
+          // Try English→Chinese mapping
+          const mappedCn = enToCnMap.get(targetDirLower)
+          if (mappedCn && allowedSet.has(mappedCn.toLowerCase())) {
+            parts[1] = mappedCn
+            relativePath = parts.join("/")
+          } else {
+            console.warn(`[writeFileBlocks] Skipping disallowed directory: wiki/${targetDirRaw}/ → ${relativePath}`)
+            continue
+          }
+        }
+      }
+    }
 
     const fullPath = `${projectPath}/${relativePath}`
     try {
