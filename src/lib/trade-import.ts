@@ -303,6 +303,382 @@ export interface ValidationResult {
   issues: string[]
 }
 
+// ==================== 列类型推断（内容探测）====================
+
+export type ColumnType =
+  | "date"
+  | "code"
+  | "name"
+  | "direction"
+  | "quantity"
+  | "price"
+  | "amount"
+  | "fee"
+  | "stampTax"
+  | "transferFee"
+  | "totalCost"
+  | "time"
+  | "ignore"
+
+export interface ColumnGuess {
+  colIndex: number
+  header: string
+  guessedType: ColumnType
+  confidence: number // 0-1
+  sampleValues: string[]
+}
+
+export interface ImportPreview {
+  headers: string[]
+  guesses: ColumnGuess[]
+  sampleRows: unknown[][]
+  confidence: number // 整体置信度 0-1
+  requiredMissing: ColumnType[] // 缺失的必需字段
+}
+
+const REQUIRED_FIELDS: ColumnType[] = ["date", "code", "name"]
+const DIRECTION_FIELDS: ColumnType[] = ["direction", "quantity", "totalCost"]
+
+function looksLikeDate(value: unknown): boolean {
+  if (value == null) return false
+  const str = String(value).trim()
+  if (!str) return false
+  // Excel serial date
+  if (typeof value === "number" && value > 30000 && value < 60000) return true
+  // Date patterns
+  return /(\d{4})[-\/\.年](\d{1,2})[-\/\.月](\d{1,2})/.test(str) ||
+    /(\d{2})[-\/\.](\d{1,2})[-\/\.](\d{1,2})/.test(str)
+}
+
+function looksLikeCode(value: unknown): boolean {
+  if (value == null) return false
+  const str = String(value).trim()
+  return /^\d{6}$/.test(str)
+}
+
+function looksLikeDirection(value: unknown): boolean {
+  if (value == null) return false
+  const str = String(value).trim().toLowerCase()
+  if (!str) return false
+  // 中文方向
+  if (/^(买|卖出?|证券买|证券卖|b|s|buy|sell|多|空|正|负|[\+\-]1?)$/.test(str)) return true
+  return false
+}
+
+function looksLikeNumber(value: unknown): boolean {
+  if (value == null) return false
+  if (typeof value === "number" && !isNaN(value)) return true
+  const str = String(value).replace(/,/g, "").replace(/[￥$¥]/g, "").trim()
+  return str !== "" && !isNaN(parseFloat(str))
+}
+
+function looksLikePositiveInteger(value: unknown): boolean {
+  if (!looksLikeNumber(value)) return false
+  const num = parseNumber(value)
+  return num > 0 && Number.isInteger(num)
+}
+
+function looksLikePrice(value: unknown): boolean {
+  if (!looksLikeNumber(value)) return false
+  const num = parseNumber(value)
+  return num > 0 && num < 100000
+}
+
+function looksLikeAmount(value: unknown): boolean {
+  if (!looksLikeNumber(value)) return false
+  const num = parseNumber(value)
+  return num >= 0 && num < 100000000
+}
+
+function looksLikeTime(value: unknown): boolean {
+  if (value == null) return false
+  const str = String(value).trim()
+  return /\d{1,2}:\d{2}(:\d{2})?/.test(str)
+}
+
+function looksLikeName(value: unknown): boolean {
+  if (value == null) return false
+  const str = String(value).trim()
+  // 中文名称或英文名称，不是纯数字
+  return str.length > 0 && str.length <= 20 && !/^\d+(\.\d+)?$/.test(str)
+}
+
+function scoreColumn(values: unknown[], header: string): { type: ColumnType; confidence: number }[] {
+  const nonNullValues = values.filter((v) => v != null && String(v).trim() !== "")
+  if (nonNullValues.length === 0) return [{ type: "ignore", confidence: 1 }]
+
+  const total = nonNullValues.length
+  const results: { type: ColumnType; confidence: number }[] = []
+
+  // Header name hint (strong signal)
+  const normalizedHeader = normalizeHeader(header)
+  const headerHints: Partial<Record<ColumnType, string[]>> = {
+    date: ["日期", "date", "day", "时间"],
+    time: ["时间", "time", "时刻"],
+    code: ["代码", "code", "证券", "股票", "编号", "合约"],
+    name: ["名称", "name", "简称", "证券名称", "股票名称"],
+    direction: ["方向", "direction", "操作", "买卖", "side", "bs", "类型"],
+    quantity: ["数量", "quantity", "volume", "股数", "手数", "份额"],
+    price: ["价格", "price", "均价", "单价", "成交价"],
+    amount: ["金额", "amount", "成交额", "总额", "清算"],
+    fee: ["手续费", "佣金", "fee", "commission", "费用"],
+    stampTax: ["印花税", "stamp", "税收", "印花"],
+    transferFee: ["过户费", "transfer", "杂费"],
+    totalCost: ["发生金额", "total", "净额", "资金"],
+  }
+
+  const headerBonus: Partial<Record<ColumnType, number>> = {}
+  for (const [type, hints] of Object.entries(headerHints)) {
+    for (const hint of hints) {
+      if (normalizedHeader.includes(hint.toLowerCase())) {
+        headerBonus[type as ColumnType] = 0.3
+        break
+      }
+    }
+  }
+
+  // Date
+  const dateCount = nonNullValues.filter(looksLikeDate).length
+  if (dateCount / total > 0.5) {
+    results.push({ type: "date", confidence: Math.min(1, dateCount / total + (headerBonus.date || 0)) })
+  }
+
+  // Time
+  const timeCount = nonNullValues.filter(looksLikeTime).length
+  if (timeCount / total > 0.5 && !normalizedHeader.includes("日期")) {
+    results.push({ type: "time", confidence: Math.min(1, timeCount / total + (headerBonus.time || 0)) })
+  }
+
+  // Code
+  const codeCount = nonNullValues.filter(looksLikeCode).length
+  if (codeCount / total > 0.3) {
+    results.push({ type: "code", confidence: Math.min(1, codeCount / total + (headerBonus.code || 0)) })
+  }
+
+  // Name
+  const nameCount = nonNullValues.filter(looksLikeName).length
+  if (nameCount / total > 0.5) {
+    results.push({ type: "name", confidence: Math.min(1, nameCount / total + (headerBonus.name || 0)) })
+  }
+
+  // Direction
+  const dirCount = nonNullValues.filter(looksLikeDirection).length
+  if (dirCount / total > 0.3) {
+    results.push({ type: "direction", confidence: Math.min(1, dirCount / total + (headerBonus.direction || 0)) })
+  }
+
+  // Quantity
+  const qtyCount = nonNullValues.filter(looksLikePositiveInteger).length
+  if (qtyCount / total > 0.5) {
+    results.push({ type: "quantity", confidence: Math.min(1, qtyCount / total + (headerBonus.quantity || 0)) })
+  }
+
+  // Price
+  const priceCount = nonNullValues.filter(looksLikePrice).length
+  if (priceCount / total > 0.5) {
+    results.push({ type: "price", confidence: Math.min(1, priceCount / total + (headerBonus.price || 0)) })
+  }
+
+  // Amount
+  const amountCount = nonNullValues.filter(looksLikeAmount).length
+  if (amountCount / total > 0.5) {
+    results.push({ type: "amount", confidence: Math.min(1, amountCount / total + (headerBonus.amount || 0)) })
+  }
+
+  // Fee
+  const feeCount = nonNullValues.filter(looksLikeNumber).length
+  if (feeCount / total > 0.5 && (headerBonus.fee || normalizedHeader.includes("费") || normalizedHeader.includes("佣"))) {
+    results.push({ type: "fee", confidence: Math.min(1, feeCount / total + (headerBonus.fee || 0)) })
+  }
+
+  // Stamp tax
+  if (feeCount / total > 0.5 && (headerBonus.stampTax || normalizedHeader.includes("印花"))) {
+    results.push({ type: "stampTax", confidence: Math.min(1, feeCount / total + (headerBonus.stampTax || 0)) })
+  }
+
+  // Transfer fee
+  if (feeCount / total > 0.5 && (headerBonus.transferFee || normalizedHeader.includes("过户"))) {
+    results.push({ type: "transferFee", confidence: Math.min(1, feeCount / total + (headerBonus.transferFee || 0)) })
+  }
+
+  // Total cost
+  if (feeCount / total > 0.5 && (headerBonus.totalCost || normalizedHeader.includes("发生") || normalizedHeader.includes("净额"))) {
+    results.push({ type: "totalCost", confidence: Math.min(1, feeCount / total + (headerBonus.totalCost || 0)) })
+  }
+
+  if (results.length === 0) {
+    results.push({ type: "ignore", confidence: 1 })
+  }
+
+  return results.sort((a, b) => b.confidence - a.confidence)
+}
+
+/**
+ * 生成导入预览信息，用于预览对话框。
+ * 当表头名匹配失败时，通过内容探测推断列类型。
+ */
+export function generateImportPreview(rows: unknown[][]): ImportPreview | null {
+  if (rows.length < 2) return null
+
+  // 先尝试找表头行
+  let headerInfo = findHeaderRow(rows)
+  let headers: string[]
+  let dataStartIndex: number
+
+  if (headerInfo) {
+    headers = headerInfo.headers
+    dataStartIndex = headerInfo.rowIndex + 1
+  } else {
+    // 没有明显表头，用第一行作为表头（如果看起来像表头）
+    // 或者生成默认列名
+    const firstRow = rows[0]
+    if (Array.isArray(firstRow) && firstRow.length >= 3) {
+      // 检查第一行是否像数据（比如有日期、代码等）
+      const looksLikeDataRow = firstRow.some((cell) => looksLikeDate(cell) || looksLikeCode(cell))
+      if (looksLikeDataRow) {
+        // 第一行是数据，生成默认列名
+        headers = firstRow.map((_, i) => `列${i + 1}`)
+        dataStartIndex = 0
+      } else {
+        // 第一行可能是表头
+        headers = firstRow.map((h) => String(h ?? ""))
+        dataStartIndex = 1
+      }
+    } else {
+      return null
+    }
+  }
+
+  // 收集每列的样本数据（最多 5 行）
+  const sampleRows: unknown[][] = []
+  const columnValues: unknown[][] = Array.from({ length: headers.length }, () => [])
+
+  for (let i = dataStartIndex; i < rows.length && sampleRows.length < 5; i++) {
+    const row = rows[i]
+    if (!Array.isArray(row) || row.length === 0) continue
+    if (row.every((cell) => cell == null || String(cell).trim() === "")) continue
+    sampleRows.push(row)
+    for (let j = 0; j < headers.length && j < row.length; j++) {
+      columnValues[j].push(row[j])
+    }
+  }
+
+  // 推断每列类型
+  const guesses: ColumnGuess[] = []
+  for (let i = 0; i < headers.length; i++) {
+    const scored = scoreColumn(columnValues[i], headers[i])
+    const best = scored[0]
+    guesses.push({
+      colIndex: i,
+      header: headers[i],
+      guessedType: best.type,
+      confidence: best.confidence,
+      sampleValues: columnValues[i].slice(0, 3).map((v) => String(v ?? "").slice(0, 20)),
+    })
+  }
+
+  // 检查必需字段
+  const foundTypes = new Set(guesses.map((g) => g.guessedType))
+  const requiredMissing = REQUIRED_FIELDS.filter((f) => !foundTypes.has(f))
+
+  // 检查方向字段（至少需要一个方向识别方式）
+  const hasDirection = DIRECTION_FIELDS.some((f) => foundTypes.has(f))
+  if (!hasDirection) {
+    requiredMissing.push("direction")
+  }
+
+  // 计算整体置信度
+  const requiredGuesses = guesses.filter((g) =>
+    [...REQUIRED_FIELDS, ...DIRECTION_FIELDS].includes(g.guessedType)
+  )
+  const confidence = requiredGuesses.length > 0
+    ? requiredGuesses.reduce((sum, g) => sum + g.confidence, 0) / requiredGuesses.length
+    : 0
+
+  return {
+    headers,
+    guesses,
+    sampleRows,
+    confidence,
+    requiredMissing,
+  }
+}
+
+/**
+ * 根据用户确认的列映射解析交易记录。
+ * 用于预览对话框确认后的导入。
+ */
+export function parseTradeRecordsWithMapping(
+  rows: unknown[][],
+  mapping: Record<ColumnType, number | null>,
+  headerRowIndex: number = 0
+): TradeRecord[] {
+  const records: TradeRecord[] = []
+
+  for (let i = headerRowIndex + 1; i < rows.length; i++) {
+    const row = rows[i]
+    if (!row || row.length === 0) continue
+    if (row.every((cell) => cell == null || String(cell).trim() === "")) continue
+
+    const date = mapping.date != null ? normalizeDate(row[mapping.date]) : ""
+    if (!date) continue
+
+    const code = mapping.code != null ? String(row[mapping.code] ?? "").trim() : ""
+    if (!code) continue
+
+    let direction: TradeRecord["direction"] | null = null
+    if (mapping.direction != null) {
+      direction = parseDirection(row[mapping.direction])
+    }
+
+    // Fallback: 从发生金额推断
+    if (direction === null && mapping.totalCost != null) {
+      const tc = parseNumber(row[mapping.totalCost])
+      if (tc < 0) direction = "buy"
+      else if (tc > 0) direction = "sell"
+    }
+
+    // Fallback: 从数量正负推断
+    if (direction === null && mapping.quantity != null) {
+      const rawQty = parseNumber(row[mapping.quantity])
+      if (rawQty < 0) direction = "sell"
+      else if (rawQty > 0) direction = "buy"
+    }
+
+    if (direction === null) continue
+
+    const quantity = mapping.quantity != null ? Math.abs(parseNumber(row[mapping.quantity])) : 0
+    const price = mapping.price != null ? parseNumber(row[mapping.price]) : 0
+    const amount = Math.abs(mapping.amount != null ? parseNumber(row[mapping.amount]) : 0)
+    const fee = mapping.fee != null ? parseNumber(row[mapping.fee]) : 0
+    const stampTax = mapping.stampTax != null ? parseNumber(row[mapping.stampTax]) : 0
+    const transferFee = mapping.transferFee != null ? parseNumber(row[mapping.transferFee]) : 0
+    let totalCost = mapping.totalCost != null ? parseNumber(row[mapping.totalCost]) : 0
+
+    if (totalCost === 0 && (amount > 0 || fee > 0 || stampTax > 0 || transferFee > 0)) {
+      const cost = amount + fee + stampTax + transferFee
+      totalCost = direction === "buy" ? -cost : cost
+    }
+
+    records.push({
+      date,
+      time: mapping.time != null ? String(row[mapping.time] ?? "").trim() || undefined : undefined,
+      code,
+      name: mapping.name != null ? String(row[mapping.name] ?? "").trim() : code,
+      direction,
+      quantity,
+      price,
+      amount,
+      fee,
+      stampTax,
+      transferFee,
+      totalCost,
+    })
+  }
+
+  return records
+}
+
 function validateParsedRecords(records: TradeRecord[]): ValidationResult {
   const issues: string[] = []
   if (records.length === 0) {
@@ -343,7 +719,7 @@ function validateParsedRecords(records: TradeRecord[]): ValidationResult {
   return { valid: issues.length === 0, issues }
 }
 
-function detectEncoding(buffer: ArrayBuffer): string {
+export function detectEncoding(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
   // Check BOM
   if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {

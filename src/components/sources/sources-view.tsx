@@ -9,7 +9,10 @@ import { copyFile, listDirectory, readFile, readFileBinary, writeFile, deleteFil
 import type { FileNode } from "@/types/wiki"
 import { startIngest } from "@/lib/ingest"
 import { enqueueIngest, enqueueBatch } from "@/lib/ingest-queue"
-import { parseTradeCSV, parseTradeRecords, parseTradeExcel, groupRecordsByDate, buildTradeMarkdown, buildTradeSummaryForReview, calculateFifoPnL } from "@/lib/trade-import"
+import { parseTradeCSV, parseTradeRecords, parseTradeExcel, groupRecordsByDate, buildTradeMarkdown, buildTradeSummaryForReview, calculateFifoPnL, generateImportPreview, parseTradeRecordsWithMapping, detectEncoding } from "@/lib/trade-import"
+import type { ImportPreview, ColumnType } from "@/lib/trade-import"
+import { TradeImportPreview } from "./trade-import-preview"
+import Papa from "papaparse"
 import { parseTradeMarkdown as parseTradeMarkdownStats } from "@/lib/trade-stats"
 import { useTranslation } from "react-i18next"
 import { normalizePath, getFileName } from "@/lib/path-utils"
@@ -27,6 +30,16 @@ export function SourcesView() {
   const [sources, setSources] = useState<FileNode[]>([])
   const [importing, setImporting] = useState(false)
   const [ingestingPath, setIngestingPath] = useState<string | null>(null)
+
+  // Trade import preview state
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewData, setPreviewData] = useState<ImportPreview | null>(null)
+  const [previewFileName, setPreviewFileName] = useState("")
+  const [pendingImport, setPendingImport] = useState<{
+    rows: unknown[][]
+    fileName: string
+    sourcePath: string
+  } | null>(null)
 
   const loadSources = useCallback(async () => {
     if (!project) return
@@ -199,7 +212,7 @@ export function SourcesView() {
     const pp = normalizePath(project.path)
     const paths = Array.isArray(selected) ? selected : [selected]
 
-    const results: { path: string; status: "ok" | "empty" | "error"; msg?: string; dates?: string[] }[] = []
+    const results: { path: string; status: "ok" | "empty" | "error" | "preview"; msg?: string; dates?: string[] }[] = []
 
     try {
       // 预读取历史交割单记录（用于 FIFO 盈亏计算）
@@ -238,19 +251,29 @@ export function SourcesView() {
         const fileName = sourcePath.split(/[\\/]/).pop() || sourcePath
         const ext = (sourcePath.split(".").pop() || "").toLowerCase()
         let records: import("@/lib/trade-import").TradeRecord[] = []
+        let rawRows: unknown[][] = []
+        let previewNeeded = false
+
         try {
           if (ext === "csv" || ext === "txt") {
             // Read as binary to detect encoding (GBK vs UTF-8)
             const buffer = await readFileBinary(sourcePath)
-            records = parseTradeCSV(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+            const text = new TextDecoder(detectEncoding(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))).decode(buffer)
+            const parsed = Papa.parse<unknown[]>(text, { skipEmptyLines: true })
+            rawRows = parsed.data
+            // Try normal parse first
+            try {
+              records = parseTradeRecords(rawRows)
+            } catch {
+              // Normal parse failed, need preview
+              previewNeeded = true
+            }
           } else if (["xlsx", "xls", "ods"].includes(ext)) {
-            let rows: unknown[][] = []
             let usedFallback = false
             try {
-              rows = await parseTradeExcelBackend(sourcePath)
+              rawRows = await parseTradeExcelBackend(sourcePath)
             } catch (backendErr: unknown) {
               const msg = backendErr instanceof Error ? backendErr.message : String(backendErr || "")
-              // 券商部分导出文件是 HTML/XML 伪装的 .xls，calamine 无法识别，fallback 到前端解析
               if (msg.includes("Invalid OLE") || msg.includes("not an office document") || msg.includes("CFB")) {
                 const buffer = await readFileBinary(sourcePath)
                 records = parseTradeExcel(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
@@ -260,7 +283,11 @@ export function SourcesView() {
               }
             }
             if (!usedFallback) {
-              records = parseTradeRecords(rows)
+              try {
+                records = parseTradeRecords(rawRows)
+              } catch {
+                previewNeeded = true
+              }
             }
           } else {
             results.push({ path: fileName, status: "error", msg: "不支持的文件格式" })
@@ -272,84 +299,156 @@ export function SourcesView() {
           continue
         }
 
+        // If preview needed, show dialog and stop processing this batch
+        if (previewNeeded && rawRows.length > 0) {
+          const preview = generateImportPreview(rawRows)
+          if (preview) {
+            setPreviewData(preview)
+            setPreviewFileName(fileName)
+            setPendingImport({ rows: rawRows, fileName, sourcePath })
+            setPreviewOpen(true)
+            setImporting(false)
+            return // Wait for user confirmation
+          }
+        }
+
         if (records.length === 0) {
           results.push({ path: fileName, status: "empty" })
           continue
         }
 
-        // 合并历史记录，用 FIFO 计算每日已实现盈亏
-        const allRecords = [...historyRecords, ...records]
-        const { datePnL } = calculateFifoPnL(allRecords)
-
-        const byDate = groupRecordsByDate(records)
-        const dates = Array.from(byDate.keys()).sort()
-
-        // Ensure directories exist
-        await createDirectory(`${pp}/raw/交割单`).catch(() => {})
-        await createDirectory(`${pp}/raw/日复盘`).catch(() => {})
-
-        for (const [date, dayRecords] of byDate) {
-          const realizedPnL = datePnL.get(date)
-
-          // Write trade detail markdown
-          const tradeMdPath = `${pp}/raw/交割单/${date}-交割单.md`
-          const tradeMd = buildTradeMarkdown(date, dayRecords, realizedPnL)
-          await writeFile(tradeMdPath, tradeMd)
-
-          // Append or create daily review
-          const reviewPath = `${pp}/raw/日复盘/${date}-复盘.md`
-          let reviewContent = ""
-          try {
-            reviewContent = await readFile(reviewPath)
-          } catch {
-            reviewContent = `# ${date} 复盘\n\n`
-          }
-
-          const summary = buildTradeSummaryForReview(date, dayRecords, realizedPnL)
-          const updatedReview = reviewContent.trimEnd() + "\n\n" + summary
-          await writeFile(reviewPath, updatedReview)
-        }
-
-        // 将新记录追加到历史记录，供后续文件使用
+        // Process records
+        await processTradeRecords(records, historyRecords, pp)
         historyRecords.push(...records)
-        results.push({ path: fileName, status: "ok", dates })
+        const byDate = groupRecordsByDate(records)
+        results.push({ path: fileName, status: "ok", dates: Array.from(byDate.keys()).sort() })
       }
 
       await loadSources()
-
-      // 汇总提示
-      const okCount = results.filter((r) => r.status === "ok").length
-      const emptyCount = results.filter((r) => r.status === "empty").length
-      const errorCount = results.filter((r) => r.status === "error").length
-
-      if (paths.length === 1) {
-        const r = results[0]
-        if (r?.status === "ok") {
-          window.alert(`交割单导入成功\n文件: ${r.path}\n日期: ${r.dates?.join(", ") || "—"}`)
-        } else if (r?.status === "empty") {
-          window.alert(`未识别到交易记录\n文件: ${r.path}\n\n请检查文件格式是否正确，或表头是否包含“成交日期/证券代码/方向/数量/金额”等关键字段。`)
-        } else if (r?.status === "error") {
-          window.alert(`导入失败\n文件: ${r.path}\n错误: ${r.msg}`)
-        }
-      } else {
-        let msg = `导入完成：${okCount} 个成功`
-        if (emptyCount > 0) msg += `，${emptyCount} 个无记录`
-        if (errorCount > 0) msg += `，${errorCount} 个失败`
-        msg += "\n\n"
-        for (const r of results) {
-          const icon = r.status === "ok" ? "✅" : r.status === "empty" ? "⚠️" : "❌"
-          msg += `${icon} ${r.path}`
-          if (r.status === "ok" && r.dates) msg += `  (${r.dates.join(", ")})`
-          if (r.status === "error" && r.msg) msg += `  — ${r.msg}`
-          msg += "\n"
-        }
-        window.alert(msg)
-      }
+      showImportResults(results, paths.length)
     } catch (err) {
       console.error("Failed to import trade file:", err)
       window.alert(`导入失败: ${err}`)
     } finally {
       setImporting(false)
+    }
+  }
+
+  async function handlePreviewConfirm(mapping: Record<ColumnType, number | null>) {
+    if (!pendingImport || !project) return
+    setPreviewOpen(false)
+    setImporting(true)
+
+    try {
+      const pp = normalizePath(project.path)
+      const records = parseTradeRecordsWithMapping(pendingImport.rows, mapping)
+
+      if (records.length === 0) {
+        window.alert("未解析到任何交易记录，请检查列映射是否正确。")
+        setImporting(false)
+        return
+      }
+
+      // Load history records
+      const historyRecords: import("@/lib/trade-import").TradeRecord[] = []
+      try {
+        const deliveryDir = `${pp}/raw/交割单`
+        const files = await listDirectory(deliveryDir)
+        for (const f of files) {
+          if (f.name.endsWith("-交割单.md")) {
+            const content = await readFile(`${deliveryDir}/${f.name}`)
+            const dateStr = f.name.replace("-交割单.md", "")
+            const stats = parseTradeMarkdownStats(dateStr, content)
+            for (const r of stats.records) {
+              historyRecords.push({ ...r, totalCost: 0 })
+            }
+          }
+        }
+      } catch {}
+
+      await processTradeRecords(records, historyRecords, pp)
+      await loadSources()
+      window.alert(`交割单导入成功\n文件: ${pendingImport.fileName}\n共 ${records.length} 条记录`)
+    } catch (err) {
+      console.error("Failed to process preview import:", err)
+      window.alert(`导入失败: ${err}`)
+    } finally {
+      setImporting(false)
+      setPendingImport(null)
+      setPreviewData(null)
+    }
+  }
+
+  function handlePreviewCancel() {
+    setPreviewOpen(false)
+    setPendingImport(null)
+    setPreviewData(null)
+    setImporting(false)
+  }
+
+  async function processTradeRecords(
+    records: import("@/lib/trade-import").TradeRecord[],
+    historyRecords: import("@/lib/trade-import").TradeRecord[],
+    pp: string
+  ) {
+    const allRecords = [...historyRecords, ...records]
+    const { datePnL } = calculateFifoPnL(allRecords)
+    const byDate = groupRecordsByDate(records)
+
+    await createDirectory(`${pp}/raw/交割单`).catch(() => {})
+    await createDirectory(`${pp}/raw/日复盘`).catch(() => {})
+
+    for (const [date, dayRecords] of byDate) {
+      const realizedPnL = datePnL.get(date)
+
+      const tradeMdPath = `${pp}/raw/交割单/${date}-交割单.md`
+      const tradeMd = buildTradeMarkdown(date, dayRecords, realizedPnL)
+      await writeFile(tradeMdPath, tradeMd)
+
+      const reviewPath = `${pp}/raw/日复盘/${date}-复盘.md`
+      let reviewContent = ""
+      try {
+        reviewContent = await readFile(reviewPath)
+      } catch {
+        reviewContent = `# ${date} 复盘\n\n`
+      }
+
+      const summary = buildTradeSummaryForReview(date, dayRecords, realizedPnL)
+      const updatedReview = reviewContent.trimEnd() + "\n\n" + summary
+      await writeFile(reviewPath, updatedReview)
+    }
+  }
+
+  function showImportResults(
+    results: { path: string; status: "ok" | "empty" | "error"; msg?: string; dates?: string[] }[],
+    totalCount: number
+  ) {
+    const okCount = results.filter((r) => r.status === "ok").length
+    const emptyCount = results.filter((r) => r.status === "empty").length
+    const errorCount = results.filter((r) => r.status === "error").length
+
+    if (totalCount === 1) {
+      const r = results[0]
+      if (r?.status === "ok") {
+        window.alert(`交割单导入成功\n文件: ${r.path}\n日期: ${r.dates?.join(", ") || "—"}`)
+      } else if (r?.status === "empty") {
+        window.alert(`未识别到交易记录\n文件: ${r.path}\n\n请检查文件格式是否正确，或表头是否包含"成交日期/证券代码/方向/数量/金额"等关键字段。`)
+      } else if (r?.status === "error") {
+        window.alert(`导入失败\n文件: ${r.path}\n错误: ${r.msg}`)
+      }
+    } else {
+      let msg = `导入完成：${okCount} 个成功`
+      if (emptyCount > 0) msg += `，${emptyCount} 个无记录`
+      if (errorCount > 0) msg += `，${errorCount} 个失败`
+      msg += "\n\n"
+      for (const r of results) {
+        const icon = r.status === "ok" ? "✅" : r.status === "empty" ? "⚠️" : "❌"
+        msg += `${icon} ${r.path}`
+        if (r.status === "ok" && r.dates) msg += `  (${r.dates.join(", ")})`
+        if (r.status === "error" && r.msg) msg += `  — ${r.msg}`
+        msg += "\n"
+      }
+      window.alert(msg)
     }
   }
 
@@ -573,6 +672,14 @@ export function SourcesView() {
       <div className="border-t px-4 py-2 text-xs text-muted-foreground">
         {t("sources.sourceCount", { count: countFiles(sources) })}
       </div>
+
+      <TradeImportPreview
+        open={previewOpen}
+        preview={previewData}
+        fileName={previewFileName}
+        onConfirm={handlePreviewConfirm}
+        onCancel={handlePreviewCancel}
+      />
     </div>
   )
 }

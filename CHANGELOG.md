@@ -4,6 +4,29 @@
 
 ---
 
+## v0.7.0 — 2026-04-21
+
+### 新功能（Feature）
+
+- **交割单导入预览对话框**：当自动表头识别失败时，弹出可视化预览对话框，通过数据内容探测推断列类型（日期、代码、方向、数量、价格等），用户可手动修正列映射后导入。解决不同券商表头格式差异导致的导入失败问题。
+  - 三层识别策略：表头名匹配 → 数据内容探测 → 用户手动映射兜底
+  - 实时显示置信度、样本数据、冲突检测
+  - 支持无表头文件的内容推断
+
+### 修复（Bug Fix）
+
+- **修复 Write to Wiki 系统指令污染对话**：`ingest.ts` 中 `executeIngestWrites()` 将内部 writePrompt 作为用户消息插入对话。已改为静默调用 LLM，不在对话中显示系统指令。
+- **修复 Deep Research 保存竞态**：`deep-research.ts` 添加 `savingTasks` Set 互斥锁，防止快速双击重复保存。
+- **修复图谱位置缓存切换项目不清理**：`graph-view.tsx` 切换项目时自动清空 `positionCache`。
+- **修复 LLM 请求 timeout 定时器泄漏**：`llm-client.ts` 在 `finally` 中清理 `timeoutId`。
+- **修复 chat-store 接口缺失**：补全 `resetProjectState` 接口声明。
+
+### 改进（Improvement）
+
+- **交割单导入增强**：支持 `.txt` 格式、CSV GBK 编码自动检测、HTML 伪装 `.xls` 识别、扩展 50+ 列名别名。
+
+---
+
 ## v0.6.9 — 2026-04-21
 
 ### 修复（Bug Fix）
